@@ -14,8 +14,12 @@
                 }).
 -export_type([app/0]).
 
--type resolvedDependency() :: {hex, Name::string(), Vsn::string(), Sha256::string()}
-                           |  {git, Name::string(), Repo::string(), Meta::tuple(), Sha256::string()}.
+-type hexDep() :: {hex, Name::string(), Vsn::string(), Sha256::string()}
+-type gitDep() :: {git, Name::string(), Repo::string(), Sha256::string()}
+
+-type resolvedDependency() :: hexDep()
+                            | gitDep()
+                            | {Name::string, [resolvedDependency()]}
 -export_type([resolvedDependency/0]).
 
 %%====================================================================
