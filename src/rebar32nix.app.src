@@ -5,7 +5,6 @@
   {applications,
    [kernel,
     stdlib,
-    beam2nix,
     getopt
    ]},
   {env,[]},
