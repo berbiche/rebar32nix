@@ -1,23 +1,45 @@
 { pkgs ? import <nixpkgs> {}
 , stdenv ? pkgs.stdenv
 , fetchFromGitHub ? pkgs.fetchFromGitHub
-, fetchHex ? pkgs.beamPackages.fetchHex
-, rebar3Relx ? pkgs.beamPackages.rebar3Relx
 , nix ? pkgs.nix
 , nix-prefetch-git ? pkgs.nix-prefetch-git
 , libcap ? pkgs.libcap
+, beamPackages ? pkgs.beam.packages.erlangR21
+, erlang ? beamPackages.erlang
+, fetchHex ? beamPackages.fetchHex
+, rebar3Relx ? beamPackages.rebar3Relx
+, buildRebar3 ? beamPackages.buildRebar3
 }:
 
 let
   inherit (stdenv) lib;
+  inherit (beamPackages) pc;
+
   getopt = fetchHex {
     pkg = "getopt";
     version = "1.0.1";
     sha256 = "U+Grg7nOtlyWctPno1uAkum9ybPugHIUcaFhwQxZlZw=";
   };
-  erlexec = fetchHex {
-    pkg = "erlexec";
+  erlexec = buildRebar3 rec {
+    name = "erlexec";
+    version = "1.17.5";
+    compilePorts = true;
+    enableDebugInfo = true;
+
+    src = fetchHex {
+      pkg = "erlexec";
+      version = "1.17.5";
+      sha256 = "uiLczMkU7xnsoQAtwWXFhBRcdM9XfJ11Tm1KyNOBAv8=";
+    };
+
+    # buildInputs = [ ];
+
+    preConfigure = ''
+      mkdir -p $out/_checkouts/pc
+      cp -v --no-preserve=mode -R ${pc}/lib/erlang/lib/${pc.name} $out/_checkouts/pc
+    '';
   };
+  
 in
 rebar3Relx rec {
   name = "rebar32nix";
@@ -47,8 +69,9 @@ rebar3Relx rec {
       mkdir -p $out/_checkouts
       mkdir -p $out/_build/default/lib
 
+      cp --no-preserve=mode -R ${pc} $out/_checkouts/pc
       cp --no-preserve=mode -R ${getopt} $out/_checkouts/getopt
-      cp --no-preserve=mode -R ${erlexec} $out/_checkouts/erlexec
+      cp --no-preserve=mode -R ${erlexec.out} $out/_checkouts/erlexec
 
       for i in _checkouts/* ; do
         ln -sv _checkouts/$i $(pwd)/_build/default/lib
