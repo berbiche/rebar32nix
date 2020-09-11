@@ -7,9 +7,11 @@
 -define(hex_registry_uri, "https://repo.hex.pm/tarballs/").
 -define(nix_prefetch_url, "nix-prefetch-url").
 -define(nix_prefetch_git, "nix-prefetch-git").
+-define(jq, "jq").
+-define(default_erlexec_opts, [sync, stdout, {stderr, null}, {kill_timeout, 120}, {nice, 10}]).
 
 -type dependency() :: {hex, Name::string(), Vsn::string()}
-                   |  {git, Name::string(), Repo::string(), Meta::tuple()}.
+                   |  {git, Name::string(), Repo::string(), Vsn::string()}.
 
 
 main(Args) ->
@@ -32,7 +34,7 @@ app(ProjectSource, ReleaseType, Args) ->
     Vsn = proplists:get_value(vsn, List),
     exec:start([]),
     Deps = fetch_deps(ProjectSource),
-    exec:stop().
+    exec:stop(),
     App = #{
             name => AppName,
             vsn => Vsn,
@@ -40,7 +42,7 @@ app(ProjectSource, ReleaseType, Args) ->
             deps => Deps,
             release_type => ReleaseType
            },
-    Doc = prettypr:above(header(Args), nix_formatter:new(App)),
+    Doc = prettypr:above(header(Args), generator:new(App)),
     io:format("~s", [prettypr:format(Doc)]),
     ok.
 
@@ -81,12 +83,7 @@ app_src(ProjectSource) ->
     FullPath = unicode:characters_to_list([ProjectSource, "/", FileName]),
     file:script(FullPath).
 
--spec fetch_deps(Path::string()) -> [nix_formatter:resolvedDependency()].
-fetch_deps(Path) ->
-    Deps = get_deps_list(Path),
-    AllDeps = fetch_deps(Deps),
-    AllDeps.
--spec fetch_deps({[dependency()], [dependency()]}) -> [nix_formatter:resolvedDependency()].
+-spec fetch_deps(Path::string() | {[dependency()], [dependency()]}) -> [generator:resolvedDependency()].
 fetch_deps({PublicDeps, PrivateDeps}) ->
     % Handle the "non-recursive" deps first. What is meant by non-recursive
     % is that these deps. will not depend on private dependencies.
@@ -101,16 +98,21 @@ fetch_deps({PublicDeps, PrivateDeps}) ->
                               case fetch_dep(Dep) of
                                   {Path, {git, Name, _, _}} -> {Name, fetch_deps(Path)};
                                   PublicDep -> PublicDep
+                              end
                       end, PrivateDeps),
-    lists:append(Deps1, Deps2).
+    lists:append(Deps1, Deps2);
+fetch_deps(Path) ->
+    Deps = get_deps_list(Path),
+    AllDeps = fetch_deps(Deps),
+    AllDeps.
 
--spec fetch_dep(dependency()) -> nix_formatter:resolvedDependency().
+-spec fetch_dep(dependency()) -> generator:resolvedDependency().
 fetch_dep({hex, Name, Vsn }) ->
     Sha256 = hex_sha256(Name, Vsn),
-    {hex, Name, Vsn, Sha256}.
-fetch_dep({git, Name, Repo, Meta}) ->
+    {hex, Name, Vsn, Sha256};
+fetch_dep({git, Name, Repo, Vsn}) ->
     {Path, Sha256} = git_sha256(Repo, Vsn),
-    {Path, {git, Name, Repo, Meta, Sha256}}.
+    {Path, {git, Name, Repo, Vsn, Sha256}}.
 
 -spec get_deps_list(string) -> {[dependency()], [dependency()]}.
 get_deps_list(Path) ->
@@ -130,7 +132,12 @@ get_deps_list(Path) ->
 convert_dep({Name, {pkg, _, Vsn}, _}) ->
     {hex, Name, Vsn};
 convert_dep({Name, {git, Repo, Meta}, _}) ->
-    {git, Name, Repo, Meta}.
+    Vsn = case Meta of
+              {ref, Ref} -> Ref;
+              {branch, Branch} -> Branch;
+              {tag, Tag} -> Tag
+          end,
+    {git, Name, Repo, binary_to_list(Vsn)}.
 
 -spec is_private_git_repo(dependency()) -> boolean().
 is_private_git_repo({git, _, "ssh://" ++ _, _}) -> true;
@@ -144,25 +151,22 @@ add_work() -> {ok}.
 %%====================================================================
 %% Fetcher functions
 %%====================================================================
--spec hex_sha256(binary(), binary()) -> string().
+-spec hex_sha256(string(), string()) -> string().
 hex_sha256(Name, Vsn) ->
     %% "https://repo.hex.pm/tarballs/${pkg}-${version}.tar";
-    Output = os:cmd(lists:join(" ", [nix_prefetch_url, hex_url(Name, Vsn)])),
-    [_, Sha, _] = string:split(Output, "\n", all),
-    Sha.
+    {ok, [{stdout, Output}]} = exec:run([nix_prefetch_url, hex_url(Name, Vsn)], default_erlexec_opts),
+    [_, Sha | _] = Output,
+    binary_to_list(Sha).
 
--spec git_sha256(string(), string()) -> string().
+-spec git_sha256(string(), string()) -> {Path::string(), Sha256::string()}.
 git_sha256(Repo, Vsn) ->
-    Opts = [sync, stdout, {stderr, null}, {kill_timeout, 120}, {nice, 10}],
-    {ok, Output} = exec:run([nix_prefetch_git, Repo, "--rev", Vsn], Opts),
-    Bin = list_to_binary(Output),
-    {match, [_, {Start, Size}]} = re:run(Bin, "\"sha256\": \"([\\w\\d]+)\""),
-    <<_:Start/binary, Sha:Size/binary, _/binary>> = Bin,
-    {OutPath, binary_to_list(Sha)}.
+    {ok, [{stdout, Output}]} = exec:run([
+            nix_prefetch_git, Repo, "--rev", Vsn,
+            "|", jq, "-r", "'.path,.sha256'"
+        ], default_erlexec_opts),
+    [Path, Sha256] = lists:map(fun binary_to_list/1, Output),
+    {Path, Sha256}.
 
 -spec hex_url(binary(), binary()) -> string().
 hex_url(Name, Vsn) ->
     hex_registry_uri ++ binary_to_list(Name) ++ "-" ++ binary_to_list(Vsn) ++ ".tar".
-
-exec(Program, Args) ->
-    {ok, [{stdout, [Bin]}]} = exec:start(Program, Args)

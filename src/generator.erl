@@ -1,9 +1,9 @@
--module(nix_formatter).
+-module(generator).
+
+-import(prettypr, [above/2]).
 
 %% API exports
 -export([new/1]).
-
--import(prettypr, [above/2]).
 
 -type(app() :: #{
                  name := atom(),
@@ -14,12 +14,12 @@
                 }).
 -export_type([app/0]).
 
--type hexDep() :: {hex, Name::string(), Vsn::string(), Sha256::string()}
--type gitDep() :: {git, Name::string(), Repo::string(), Sha256::string()}
+-type hexDep() :: {hex, Name::string(), Vsn::string(), Sha256::string()}.
+-type gitDep() :: {git, Name::string(), Repo::string(), Sha256::string()}.
 
 -type resolvedDependency() :: hexDep()
                             | gitDep()
-                            | {Name::string, [resolvedDependency()]}
+                            | {Name::string, [resolvedDependency()]}.
 -export_type([resolvedDependency/0]).
 
 %%====================================================================
@@ -30,7 +30,7 @@ new(#{name := AppName, vsn := Vsn} = App) ->
     Name = app_name(AppName, Vsn),
     above([
            header(),
-           nest(builds(App)),
+        %    nest(builds(App)),
            text("in"),
            text(""),
            prettypr:sep([
@@ -80,22 +80,13 @@ dep_doc({hex, Name, Vsn, Sha256}) ->
            text("};"),
            text("")
           ]);
-dep_doc({git, Name, Repo, Meta, Sha256}) ->
-    GitVsn = git_vsn(Meta),
+dep_doc({git, Name, Repo, Vsn, Sha256}) ->
     above([
-           prettypr:beside(do_dep_name(Name, GitVsn), text(" = fetchgit {")),
-           nest(git_attrs(Repo, GitVsn, Sha256)),
+           prettypr:beside(do_dep_name(Name, Vsn), text(" = fetchgit {")),
+           nest(git_attrs(Repo, Vsn, Sha256)),
            text("};"),
            text("")
           ]).
-
--spec git_vsn({atom(), binary()}) -> binary().
-git_vsn({ref, Ref}) ->
-    Ref;
-git_vsn({branch, Branch}) ->
-    Branch;
-git_vsn({tag, Tag}) ->
-    Tag.
 
 -spec hex_attrs(binary(), binary(), binary()) -> prettypr:document().
 hex_attrs(Name, Vsn, Sha256) ->
@@ -155,12 +146,11 @@ deps_names(Deps) ->
 app_name(Name, Vsn) ->
     do_dep_name(atom_to_list(Name), Vsn).
 
--spec dep_name({binary() | atom(), binary()}) -> prettypr:document().
+-spec dep_name(resolvedDependency()) -> prettypr:document().
 dep_name({hex, Name, Vsn}) ->
     do_dep_name(Name, Vsn);
-dep_name({git, Name, _Repo, Meta}) ->
-    GitVsn = git_vsn(Meta),
-    do_dep_name(Name, GitVsn).
+dep_name({git, Name, _Repo, Vsn}) ->
+    do_dep_name(Name, Vsn).
 
 -spec do_dep_name(binary() | string(), binary()) -> prettypr:document().
 do_dep_name(Name, Vsn) ->
@@ -188,7 +178,7 @@ nest(Document) ->
 
 -spec text(binary() | string()) -> prettypr:document().
 text(Bin) when is_binary(Bin) ->
-    prettypr:text(erlang:binary_to_list(Bin));
+    prettypr:text(binary_to_list(Bin));
 text(Str) when is_list(Str) ->
     prettypr:text(Str).
 
