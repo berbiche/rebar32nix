@@ -26,7 +26,7 @@
 %% API functions
 %%====================================================================
 -spec new(app()) -> prettypr:document().
-new(#{name := AppName, vsn := Vsn} = App) ->
+new(#{name := AppName, vsn := Vsn}) ->
     Name = app_name(AppName, Vsn),
     above([
            header(),

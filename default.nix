@@ -5,38 +5,30 @@
 , nix-prefetch-git ? pkgs.nix-prefetch-git
 , libcap ? pkgs.libcap
 , beamPackages ? pkgs.beam.packages.erlangR21
-, erlang ? beamPackages.erlang
-, fetchHex ? beamPackages.fetchHex
-, rebar3Relx ? beamPackages.rebar3Relx
-, buildRebar3 ? beamPackages.buildRebar3
+
+, customPkgs ? (import ../nixgear { inherit pkgs; }).packages
+
+, erlang ? customPkgs.erlang
+, fetchHex ? customPkgs.fetchHex
+, rebar3Relx ? customPkgs.rebar3Relx
+, buildRebar3 ? customPkgs.buildRebar3
+, fetchRebar3Deps ? customPkgs.fetchRebar3Deps
 }:
 
 let
   inherit (stdenv) lib;
-  inherit (beamPackages) pc;
 
-  getopt = fetchHex {
-    pkg = "getopt";
-    version = "1.0.1";
-    sha256 = "U+Grg7nOtlyWctPno1uAkum9ybPugHIUcaFhwQxZlZw=";
-  };
-  erlexec = buildRebar3 rec {
-    name = "erlexec";
-    version = "1.17.5";
-    compilePorts = true;
-    enableDebugInfo = true;
+  deps = fetchRebar3Deps {
+    name = "rebar32nix";
+    version = "0.1.0";
+    sha256 = "qnmHWXeUQpB3ZySp1qod8/LIT6rHyZjUwMedouzKrrA=";
 
-    src = fetchHex {
-      pkg = "erlexec";
-      version = "1.17.5";
-      sha256 = "uiLczMkU7xnsoQAtwWXFhBRcdM9XfJ11Tm1KyNOBAv8=";
-    };
+    src = "${./.}/rebar.lock";
 
-    # buildInputs = [ ];
-
-    preConfigure = ''
-      mkdir -p $out/_checkouts/pc
-      cp -v --no-preserve=mode -R ${pc}/lib/erlang/lib/${pc.name} $out/_checkouts/pc
+    postInstall = ''
+      mkdir -p $out/_checkouts
+      cp -rT $out/lib/erlang/lib $out/_checkouts
+      cp -rT $out/lib/erlang/plugins $out/_checkouts
     '';
   };
   
@@ -52,32 +44,24 @@ rebar3Relx rec {
       baseName = baseNameOf (toString name);
     in !(type == "directory" && (baseName == "result" || baseName == "_build"));
   };
-
   # For erlexec
   buildInputs = lib.optional stdenv.isLinux libcap.dev;
+  checkouts = deps;
+  CXXFLAGS = ''-isystem ${libcap.dev}/include -DHAVE_CAP'';
+  LDFLAGS = ''-L"${libcap.dev}/lib" -lcap'';
 
   postPatch = ''
     substituteInPlace ./src/rebar32nix.erl --replace "nix-prefetch-url" "${nix}/bin/nix-prefetch-url"
     substituteInPlace ./src/rebar32nix.erl --replace "nix-prefetch-git" "${nix-prefetch-git}/bin/nix-prefetch-git"
+    substituteInPlace ./src/rebar32nix.erl --replace "erlexec_port" $out/bin/exec-port
   '';
 
-  checkouts = stdenv.mkDerivation {
-    name = "rebar32nix-checkouts";
-    inherit src;
-    phases = "installPhase";
-    installPhase = ''
-      mkdir -p $out/_checkouts
-      mkdir -p $out/_build/default/lib
+  buildPhase = "HOME=. rebar3 as default escriptize";
 
-      cp --no-preserve=mode -R ${pc} $out/_checkouts/pc
-      cp --no-preserve=mode -R ${getopt} $out/_checkouts/getopt
-      cp --no-preserve=mode -R ${erlexec.out} $out/_checkouts/erlexec
-
-      for i in _checkouts/* ; do
-        ln -sv _checkouts/$i $(pwd)/_build/default/lib
-      done
-    '';
-  };
+  postInstall = ''
+    cp --preserve=mode _checkouts/erlexec/priv/${stdenv.buildPlatform.config}/exec-port $out/bin/exec-port
+    ls -lA $out/bin
+  '';
 
   meta = with stdenv.lib; {
     description = "A script to generate a Nix expression out of a rebar3.lock file";
