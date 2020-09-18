@@ -4,6 +4,8 @@
 , nix ? pkgs.nix
 , nix-prefetch-git ? pkgs.nix-prefetch-git
 , libcap ? pkgs.libcap
+, jq ? pkgs.jq
+, makeWrapper ? pkgs.makeWrapper
 , beamPackages ? pkgs.beam.packages.erlangR21
 
 , customPkgs ? (import ../nixgear { inherit pkgs; }).packages
@@ -21,7 +23,7 @@ let
   deps = fetchRebar3Deps {
     name = "rebar32nix";
     version = "0.1.0";
-    sha256 = "qnmHWXeUQpB3ZySp1qod8/LIT6rHyZjUwMedouzKrrA=";
+    sha256 = "dLEP2t8eNel2m75esBjF4yHKQLcIAyBFwFZm1vL/DFc=";
 
     src = "${./.}/rebar.lock";
 
@@ -45,7 +47,7 @@ rebar3Relx rec {
     in !(type == "directory" && (baseName == "result" || baseName == "_build"));
   };
   # For erlexec
-  buildInputs = lib.optional stdenv.isLinux libcap.dev;
+  buildInputs = [ makeWrapper ] ++ lib.optional stdenv.isLinux libcap.dev;
   checkouts = deps;
   CXXFLAGS = ''-isystem ${libcap.dev}/include -DHAVE_CAP'';
   LDFLAGS = ''-L"${libcap.dev}/lib" -lcap'';
@@ -53,6 +55,7 @@ rebar3Relx rec {
   postPatch = ''
     substituteInPlace ./src/rebar32nix.erl --replace "nix-prefetch-url" "${nix}/bin/nix-prefetch-url"
     substituteInPlace ./src/rebar32nix.erl --replace "nix-prefetch-git" "${nix-prefetch-git}/bin/nix-prefetch-git"
+    substituteInPlace ./src/rebar32nix.erl --replace "jq" "${jq}/bin/jq"
     substituteInPlace ./src/rebar32nix.erl --replace "erlexec_port" $out/bin/exec-port
   '';
 
@@ -60,7 +63,9 @@ rebar3Relx rec {
 
   postInstall = ''
     cp --preserve=mode _checkouts/erlexec/priv/${stdenv.buildPlatform.config}/exec-port $out/bin/exec-port
-    ls -lA $out/bin
+    wrapProgram $out/bin/exec-port \
+      --set-default SHELL ${stdenv.shell} \
+      --prefix PATH : ${lib.makeBinPath [ nix nix-prefetch-git jq ]}
   '';
 
   meta = with stdenv.lib; {

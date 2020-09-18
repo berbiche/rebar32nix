@@ -8,7 +8,7 @@
 -define(NIX_PREFETCH_GIT, "nix-prefetch-git").
 -define(JQ, "jq").
 -define(ERLEXEC_PORT, "erlexec_port").
--define(DEFAULT_ERLEXEC_OPTS, [sync, stdout, {stderr, null}, {kill_timeout, 120}, {nice, 10}]).
+-define(DEFAULT_ERLEXEC_OPTS, [sync, stdout, stderr, {kill_timeout, 120}, {nice, 10}]).
 
 -type dependency() :: {hex, Name::string(), Vsn::string()}
                    |  {git, Name::string(), Repo::string(), Vsn::string()}.
@@ -47,9 +47,12 @@ app(ProjectSource, LockFile, ReleaseType, Args) ->
     _ = application:load(rebar32nix),
     {ok, {application, AppName, List}} = app_src(ProjectSource),
     Vsn = proplists:get_value(vsn, List),
+
     {ok, L} = exec:start_link([{portexe, ?ERLEXEC_PORT}]),
     Deps = fetch_deps(LockFile),
+    log_stderr("Fetched all dependencies! Generating~n"),
     exec:stop_and_wait(L, 5000),
+
     App = #{
             name => AppName,
             vsn => Vsn,
@@ -59,6 +62,7 @@ app(ProjectSource, LockFile, ReleaseType, Args) ->
            },
     Doc = prettypr:above(header(Args), generator:new(App)),
     io:format("~s", [prettypr:format(Doc)]),
+    log_stderr("Generation complete~n"),
     ok.
 
 %%====================================================================
@@ -66,11 +70,12 @@ app(ProjectSource, LockFile, ReleaseType, Args) ->
 %%====================================================================
 opts_list() ->
     [
-     %% {Name,      ShortOpt,  LongOpt,        ArgSpec,         HelpMsg}
-     {help,         $h,        "help",         undefined,       "Print this help."},
-     {version,      $v,        "version",      undefined,       "Show version information."},
-     {release_type, undefined, "release-type", {atom, release}, "Generate either a release or an escript."},
-     {file,         undefined, undefined,      string,          "Input file"}
+     %% {Name,      ShortOpt,  LongOpt,        ArgSpec,                HelpMsg}
+     {help,         $h,        "help",         undefined,              "Print this help."},
+     {version,      $v,        "version",      undefined,              "Show version information."},
+     {release_type, undefined, "release-type", {atom, release},        "Generate either a release or an escript."},
+     {builder,      undefined, "builder",      {string, "rebar3Relx"}, "Derivation builder to use"},
+     {file,         undefined, undefined,      string,                 "Input file"}
     ].
 
 -spec header([string()]) -> prettypr:document().
@@ -124,12 +129,12 @@ fetch_deps(Path) ->
     AllDeps.
 
 -spec fetch_dep(dependency()) -> generator:resolvedDependency().
-fetch_dep({hex, Name, Vsn }) ->
+fetch_dep({hex, Name, Vsn}) ->
     Sha256 = hex_sha256(Name, Vsn),
     {hex, Name, Vsn, Sha256};
-fetch_dep({git, Name, Repo, Vsn}) ->
+fetch_dep({git, Name, Repo, Vsn, IsPrivateRepo}) ->
     {Path, Sha256} = git_sha256(Repo, Vsn),
-    {Path, {git, Name, Repo, Vsn, Sha256}}.
+    {Path, {git, Name, Repo, Vsn, IsPrivateRepo, Sha256}}.
 
 -spec get_deps_list(string) -> {[dependency()], [dependency()]}.
 get_deps_list(Filename) ->
@@ -139,7 +144,6 @@ get_deps_list(Filename) ->
                        [{binary_to_list(Name), Source, Level} || {Name, Source, Level} <- Deps];
                    false -> []
                end,
-    log_stderr("DepsList: ~p~n", [DepsList]),
     PublicDeps = lists:map(fun convert_dep/1, DepsList),
     PrivateDepsToVisit = lists:filter(fun is_private_git_repo/1, DepsList),
     {PublicDeps, PrivateDepsToVisit}.
@@ -150,13 +154,14 @@ convert_dep({Name, {pkg, _, Vsn}, _}) ->
 convert_dep({Name, {git, Repo, Meta}, _}) ->
     Vsn = case Meta of
               {ref, Ref} -> Ref;
-              {branch, Branch} -> Branch;
-              {tag, Tag} -> Tag
+              {branch, Branch} -> "refs/heads/" ++ Branch;
+              {tag, Tag} -> "refs/tags/" ++ Tag
           end,
-    {git, Name, Repo, binary_to_list(Vsn)}.
+    F = {git, Name, Repo, Vsn},
+    erlang:append_element(F, is_private_git_repo(F)).
 
 -spec is_private_git_repo(dependency()) -> boolean().
-is_private_git_repo({git, _, "ssh://" ++ _, _}) -> true;
+is_private_git_repo({git, _, Repo, _}) -> string:find(Repo, "ssh://", leading) =/= nomatch;
 is_private_git_repo(_) -> false.
 
 %%====================================================================
@@ -166,21 +171,29 @@ is_private_git_repo(_) -> false.
 hex_sha256(Name, Vsn) ->
     %% "https://repo.hex.pm/tarballs/${pkg}-${version}.tar";
     log_stderr("hex_sha256: fetching ~s~n", [hex_url(Name, Vsn)]),
-    {ok, [{stdout, Output}]} = exec:run([?NIX_PREFETCH_URL, hex_url(Name, Vsn)], ?DEFAULT_ERLEXEC_OPTS),
+
+    {ok, [{stdout, Output} | _]} = exec:run([
+        ?NIX_PREFETCH_URL, hex_url(Name, Vsn)
+    ], ?DEFAULT_ERLEXEC_OPTS),
+
     [Sha | _] = Output,
-    OutSha = binary_to_list(iolist_to_binary(Sha)),
+    OutSha = string:trim(binary_to_list(Sha)),
+
     log_stderr("hex_sha256: fetched ~s with hash ~s~n", [hex_url(Name, Vsn), OutSha]),
+
     OutSha.
 
 -spec git_sha256(string(), string()) -> {Path::string(), Sha256::string()}.
 git_sha256(Repo, Vsn) ->
-    log_stderr("git_sha256: fetching ~s, rev: ~s", [Repo, Vsn]),
-    {ok, [{stdout, Output}]} = exec:run([
-            ?NIX_PREFETCH_GIT, Repo, "--rev", Vsn,
-            "|", ?JQ, "-r", "'.path,.sha256'"
-        ], ?DEFAULT_ERLEXEC_OPTS),
-    [Path, Sha256] = lists:map(fun binary_to_list/1, Output),
-    {Path, Sha256}.
+    log_stderr("git_sha256: fetching ~s, rev: ~s~n", [Repo, Vsn]),
+    
+    {ok, [{stdout, [Output]} | _]} = exec:run([
+        ?NIX_PREFETCH_GIT, "--url", "'" ++ Repo ++ "'", "--rev", Vsn
+    ], ?DEFAULT_ERLEXEC_OPTS),
+
+    #{<<"path">> := Path, <<"sha256">> := Sha256} = jsone:decode(Output),
+    log_stderr("git_sha256: fetched ~s, Path: ~s, Sha256: ~s~n", [Repo, Path, Sha256]),
+    {binary_to_list(Path), binary_to_list(Sha256)}.
 
 -spec hex_url(binary(), binary()) -> string().
 hex_url(Name, Vsn) ->

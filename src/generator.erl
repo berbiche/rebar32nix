@@ -10,12 +10,13 @@
                  vsn := string(),
                  src := string(),
                  deps := [{binary(), binary()}],
-                 release_type := atom()
+                 release_type := atom(),
+                 builder := string()
                 }).
 -export_type([app/0]).
 
 -type hexDep() :: {hex, Name::string(), Vsn::string(), Sha256::string()}.
--type gitDep() :: {git, Name::string(), Repo::string(), Sha256::string()}.
+-type gitDep() :: {git, Name::string(), Repo::string(), Rev::string(), IsPrivateRepo::boolean(), Sha256::string()}.
 
 -type resolvedDependency() :: hexDep()
                             | gitDep()
@@ -26,11 +27,11 @@
 %% API functions
 %%====================================================================
 -spec new(app()) -> prettypr:document().
-new(#{name := AppName, vsn := Vsn}) ->
+new(#{name := AppName, vsn := Vsn, builder := Builder} = App) ->
     Name = app_name(AppName, Vsn),
     above([
-           header(),
-        %    nest(builds(App)),
+           header(Builder),
+           nest(builds(App)),
            text("in"),
            text(""),
            prettypr:sep([
@@ -48,31 +49,31 @@ builds(#{deps := Deps} = App) ->
     above([app(App), deps(Deps)]).
 
 -spec app(app()) -> prettypr:document().
-app(#{name := AppName, vsn := Vsn} = App) ->
+app(#{name := AppName, vsn := Vsn, builder := Builder} = App) ->
     Name = app_name(AppName, Vsn),
     above([
-           prettypr:beside(Name, text(" = { rebar3Relx }:")),
+           prettypr:beside(Name, text(" = { " ++ Builder ++ " }:")),
            nest(derivation(App)),
            text(" ")
           ]).
 
--spec header() -> prettypr:document().
-header() ->
+-spec header(string()) -> prettypr:document().
+header(Builder) ->
     above([
-           text("{ stdenv, erlang, fetchHex, fetchGit, rebar3Relx }:"),
+           text("{ stdenv, erlang, fetchHex, fetchGit, fetchgit, " ++ Builder ++ " }:"),
            text(""),
            text("let"),
            text("")
           ]
      ).
 
--spec deps([{binary(), binary()}]) -> prettypr:document().
+-spec deps([resolvedDependency()]) -> prettypr:document().
 deps(Deps) ->
     lists:foldr(fun(Dep, Acc) ->
                         prettypr:above(dep_doc(Dep), Acc)
                 end, prettypr:empty(), Deps).
 
--spec dep_doc({binary(), binary()}) -> prettypr:document().
+-spec dep_doc(resolvedDependency()) -> prettypr:document().
 dep_doc({hex, Name, Vsn, Sha256}) ->
     above([
            prettypr:beside(do_dep_name(Name, Vsn), text(" = fetchHex {")),
@@ -80,20 +81,36 @@ dep_doc({hex, Name, Vsn, Sha256}) ->
            text("};"),
            text("")
           ]);
-dep_doc({git, Name, Repo, Vsn, Sha256}) ->
+dep_doc({git, Name, Repo, Vsn, IsPrivateRepo, Sha256}) ->
+    GitAttrs =
+        if IsPrivateRepo -> git_attrs(Repo, Vsn);
+           true -> git_attrs(Repo, Vsn, Sha256)
+        end,
+    FetchGit =
+        if IsPrivateRepo -> "fetchGit";
+           true -> "fetchgit"
+        end,
     above([
-           prettypr:beside(do_dep_name(Name, Vsn), text(" = fetchgit {")),
-           nest(git_attrs(Repo, Vsn, Sha256)),
+           prettypr:beside(do_dep_name(Name, Vsn), text(" = " ++ FetchGit ++ " {")),
+           nest(GitAttrs),
            text("};"),
            text("")
           ]).
 
--spec hex_attrs(binary(), binary(), binary()) -> prettypr:document().
+-spec hex_attrs(string(), string(), string()) -> prettypr:document().
 hex_attrs(Name, Vsn, Sha256) ->
     above([
-           kv("pkg", quote(binary_to_list(Name))),
-           kv("version", quote(binary_to_list(Vsn))),
-           kv("sha256", quote(binary_to_list(Sha256)))
+           kv("pkg", quote(Name)),
+           kv("version", quote(Vsn)),
+           kv("sha256", quote(Sha256))
+          ]).
+
+%% For private git repos
+-spec git_attrs(string(), string()) -> prettypr:document().
+git_attrs(Repo, GitVsn) ->
+    above([
+           kv("url", quote(Repo)),
+           kv("rev", quote(GitVsn))
           ]).
 
 -spec git_attrs(string(), string(), string()) -> prettypr:document().
@@ -105,14 +122,14 @@ git_attrs(Repo, GitVsn, Sha256) ->
           ]).
 
 -spec derivation(app()) -> prettypr:document().
-derivation(App) ->
+derivation(#{builder := Builder} = App) ->
     above(
-      text("rebar3Relx {"),
+      text(Builder ++ " {"),
       above(
         nest(body(App)),
         text("};")
-           )
-     ).
+      )
+    ).
 
 -spec body(app()) -> prettypr:document().
 body(#{name := Name, vsn := Vsn, src := Src, deps := Deps, release_type := ReleaseType}) ->
@@ -125,7 +142,7 @@ body(#{name := Name, vsn := Vsn, src := Src, deps := Deps, release_type := Relea
              ],
     above(Chunks).
 
--spec deps_list([{binary(), binary()}]) -> prettypr:document().
+-spec deps_list([resolvedDependency()]) -> prettypr:document().
 deps_list(Deps) ->
     case deps_names(Deps) of
         [] ->
@@ -147,9 +164,9 @@ app_name(Name, Vsn) ->
     do_dep_name(atom_to_list(Name), Vsn).
 
 -spec dep_name(resolvedDependency()) -> prettypr:document().
-dep_name({hex, Name, Vsn}) ->
+dep_name({hex, Name, Vsn, _Sha256}) ->
     do_dep_name(Name, Vsn);
-dep_name({git, Name, _Repo, Vsn}) ->
+dep_name({git, Name, _Repo, Vsn, _Path, _Sha256}) ->
     do_dep_name(Name, Vsn).
 
 -spec do_dep_name(binary() | string(), binary()) -> prettypr:document().
@@ -180,12 +197,16 @@ nest(Document) ->
 text(Bin) when is_binary(Bin) ->
     prettypr:text(binary_to_list(Bin));
 text(Str) when is_list(Str) ->
-    prettypr:text(Str).
+    prettypr:text(Str);
+text(Atom) when is_atom(Atom) ->
+    prettypr:text(atom_to_list(Atom)).
 
 -spec above([prettypr:document()]) -> prettypr:document().
 above(List) when is_list(List) ->
     lists:foldr(fun prettypr:above/2, prettypr:empty(), List).
 
--spec fix_version(binary()) -> string().
-fix_version(Vsn) ->
+-spec fix_version(string() | binary() | atom()) -> string().
+fix_version(Vsn) when is_atom(Vsn) -> fix_version(atom_to_list(Vsn));
+fix_version(Vsn) when is_binary(Vsn) -> fix_version(binary_to_list(Vsn));
+fix_version(Vsn) when is_list(Vsn) ->
     re:replace(Vsn, "\\.", "_", [global, {return, list}]).
