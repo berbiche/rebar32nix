@@ -8,8 +8,10 @@
 , makeWrapper ? pkgs.makeWrapper
 , beamPackages ? pkgs.beam.packages.erlangR21
 
-, customPkgs ? (import ../nixgear { inherit pkgs; }).packages
-
+, customPkgs ?
+    (if builtins.pathExists ../nixgear
+     then (import ../nixgear { inherit pkgs; }).packages
+     else beamPackages)
 , erlang ? customPkgs.erlang
 , fetchHex ? customPkgs.fetchHex
 , rebar3Relx ? customPkgs.rebar3Relx
