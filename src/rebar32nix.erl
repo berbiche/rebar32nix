@@ -15,7 +15,7 @@
 
 
 main(Args) ->
-    %% io:format("Args: ~p~n", [Args]),
+    log_stderr("Args: ~p~n", [Args]),
     {ok, {Opts, _}} = getopt:parse(opts_list(), Args),
     case proplists:get_bool(help, Opts) of
         true -> getopt:usage(opts_list(), "rebar32nix");
@@ -32,18 +32,19 @@ main(Args) ->
                             erlang:halt(1);
                         true ->
                             ReleaseType = proplists:get_value(release_type, Opts),
+                            Builder = proplists:get_value(builder, Opts),
                             Src = filename:absname_join(Path, "src"),
                             LockFile = filename:absname_join(Path, "rebar.lock"),
                             log_stderr("src is ~s~n", [Src]),
                             log_stderr("lockfile is ~s~n", [LockFile]),
-                            app(Src, LockFile, ReleaseType, Args)
+                            app(Src, LockFile, ReleaseType, Builder, Args)
                     end
             end
     end,
     erlang:halt(0).
 
--spec app(string(), string(), string(), tuple()) -> ok.
-app(ProjectSource, LockFile, ReleaseType, Args) ->
+-spec app(string(), string(), string(), string(), tuple()) -> ok.
+app(ProjectSource, LockFile, ReleaseType, Builder, Args) ->
     _ = application:load(rebar32nix),
     {ok, {application, AppName, List}} = app_src(ProjectSource),
     Vsn = proplists:get_value(vsn, List),
@@ -58,7 +59,8 @@ app(ProjectSource, LockFile, ReleaseType, Args) ->
             vsn => Vsn,
             src => ProjectSource,
             deps => Deps,
-            release_type => ReleaseType
+            release_type => ReleaseType,
+            builder => Builder
            },
     Doc = prettypr:above(header(Args), generator:new(App)),
     io:format("~s", [prettypr:format(Doc)]),
