@@ -33,7 +33,6 @@ new(#{name := AppName, vsn := Vsn, builder := Builder} = App) ->
            header(Builder),
            nest(builds(App)),
            text("in"),
-           text(""),
            prettypr:sep([
                 text(" erlang.callPackage"),
                 Name,
@@ -63,7 +62,7 @@ header(Builder) ->
            text("{ stdenv, erlang, fetchHex, fetchGit, fetchgit, " ++ Builder ++ " }:"),
            text(""),
            text("let"),
-           text("")
+           prettypr:empty()
           ]
      ).
 
@@ -76,25 +75,21 @@ deps(Deps) ->
 -spec dep_doc(resolvedDependency()) -> prettypr:document().
 dep_doc({hex, Name, Vsn, Sha256}) ->
     above([
-           prettypr:beside(do_dep_name(Name, Vsn), text(" = fetchHex {")),
+           follow(do_dep_name(Name, Vsn), text(" = fetchHex {")),
            nest(hex_attrs(Name, Vsn, Sha256)),
            text("};"),
-           text("")
+           prettypr:empty()
           ]);
 dep_doc({git, Name, Repo, Vsn, IsPrivateRepo, Sha256}) ->
-    GitAttrs =
-        if IsPrivateRepo -> git_attrs(Repo, Vsn);
-           true -> git_attrs(Repo, Vsn, Sha256)
-        end,
-    FetchGit =
-        if IsPrivateRepo -> "fetchGit";
-           true -> "fetchgit"
+    {GitAttrs, FetchGit} =
+        if IsPrivateRepo -> {git_attrs(Repo, Vsn), "fetchGit"};
+           true -> {git_attrs(Repo, Vsn, Sha256), "fetchgit"}
         end,
     above([
-           prettypr:beside(do_dep_name(Name, Vsn), text(" = " ++ FetchGit ++ " {")),
+           follow(do_dep_name(Name, Vsn), text(" = " ++ FetchGit ++ " {")),
            nest(GitAttrs),
            text("};"),
-           text("")
+           prettypr:empty()
           ]).
 
 -spec hex_attrs(string(), string(), string()) -> prettypr:document().
@@ -133,14 +128,13 @@ derivation(#{builder := Builder} = App) ->
 
 -spec body(app()) -> prettypr:document().
 body(#{name := Name, vsn := Vsn, src := Src, deps := Deps, release_type := ReleaseType}) ->
-    Chunks = [
-              kv("name", quote(atom_to_list(Name))),
-              kv("version", quote(Vsn)),
-              kv("src", Src),
-              deps_list(Deps),
-              kv("releaseType", quote(atom_to_list(ReleaseType)))
-             ],
-    above(Chunks).
+    above([
+           kv("name", quote(atom_to_list(Name))),
+           kv("version", quote(Vsn)),
+           kv("src", Src),
+           deps_list(Deps),
+           kv("releaseType", quote(atom_to_list(ReleaseType)))
+          ]).
 
 -spec deps_list([resolvedDependency()]) -> prettypr:document().
 deps_list(Deps) ->
@@ -149,7 +143,7 @@ deps_list(Deps) ->
             prettypr:empty();
         DepsDocs ->
             above([
-                   prettypr:sep([text("beamDeps = [")]),
+                   text("beamDeps = ["),
                    nest(above(DepsDocs)),
                    text("];")
                   ])
@@ -204,6 +198,10 @@ text(Atom) when is_atom(Atom) ->
 -spec above([prettypr:document()]) -> prettypr:document().
 above(List) when is_list(List) ->
     lists:foldr(fun prettypr:above/2, prettypr:empty(), List).
+
+-spec follow(prettypr:document(), prettypr:document()) -> prettypr:document().
+follow(D1, D2) ->
+    prettypr:follow(D1, D2, 2).
 
 -spec fix_version(string() | binary() | atom()) -> string().
 fix_version(Vsn) when is_atom(Vsn) -> fix_version(atom_to_list(Vsn));

@@ -13,6 +13,17 @@
 -type dependency() :: {hex, Name::string(), Vsn::string()}
                    |  {git, Name::string(), Repo::string(), Vsn::string()}.
 
+%% prettypr emits tabs when nesting == 8, so we replace them with spaces
+-define(REPLACE_TABS_WITH_SPACES(S), lists:flatten(string:replace(S, "\t", "\s\s\s\s\s\s\s\s", all))).
+-ifdef(OTP_RELEASE).
+  -if(?OTP_RELEASE >= 23).
+  fix_prettypr_document_tabs(S) -> S.
+  -else.
+  fix_prettypr_document_tabs(S) -> ?REPLACE_TABS_WITH_SPACES(S).
+  -endif.
+-else.
+fix_prettypr_document_tabs(S) -> ?REPLACE_TABS_WITH_SPACES(S).
+-endif.
 
 main(Args) ->
     log_stderr("Args: ~p~n", [Args]),
@@ -20,52 +31,74 @@ main(Args) ->
     case proplists:get_bool(help, Opts) of
         true -> getopt:usage(opts_list(), "rebar32nix");
         false ->
-            case proplists:get_value(file, Opts) of
-                undefined ->
-                    getopt:usage(opts_list(), "rebar32nix"),
-                    erlang:halt(1);
-                File ->
-                    Path = filename:absname(File),
-                    case filelib:is_dir(Path) of
-                        false ->
-                            io:format("Invoke rebar32nix on the root folder of the project~n"),
-                            erlang:halt(1);
-                        true ->
-                            ReleaseType = proplists:get_value(release_type, Opts),
-                            Builder = proplists:get_value(builder, Opts),
-                            Src = filename:absname_join(Path, "src"),
-                            LockFile = filename:absname_join(Path, "rebar.lock"),
-                            log_stderr("src is ~s~n", [Src]),
-                            log_stderr("lockfile is ~s~n", [LockFile]),
-                            app(Src, LockFile, ReleaseType, Builder, Args)
-                    end
-            end
+            Path = get_input_file(Opts),
+            ReleaseType = proplists:get_value(release_type, Opts),
+            Builder = proplists:get_value(builder, Opts),
+            Src = filename:absname_join(Path, "src"),
+            LockFile = filename:absname_join(Path, "rebar.lock"),
+            OutFile = get_out_file(Opts),
+            log_stderr("src is ~s~n", [Src]),
+            log_stderr("lockfile is ~s~n", [LockFile]),
+
+            Doc = app(Path, Src, LockFile, ReleaseType, Builder, Args),
+            DocTabsReplaced = fix_prettypr_document_tabs(Doc),
+            io:format(OutFile, "~s", [DocTabsReplaced]),
+            log_stderr("Generation complete~n"),
+            ok
     end,
     erlang:halt(0).
 
--spec app(string(), string(), string(), string(), tuple()) -> ok.
-app(ProjectSource, LockFile, ReleaseType, Builder, Args) ->
+-spec get_input_file(tuple()) -> no_return() | string().
+get_input_file(Opts) ->
+    case proplists:get_value(file, Opts) of
+        undefined ->
+            getopt:usage(opts_list(), "rebar32nix"),
+            erlang:halt(1);
+        File ->
+            Path = filename:absname(File),
+            case filelib:is_dir(Path) of
+                false ->
+                    io:format("Invoke rebar32nix on the root folder of the project~n"),
+                    erlang:halt(1);
+                true ->
+                    filename:dirname(Path)
+            end
+    end.
+
+-spec get_out_file(tuple()) -> atom() | file:io_device().
+get_out_file(Opts) ->
+    case proplists:get_value(out_file, Opts) of
+        undefined -> standard_io;
+        Out ->
+            Args = [write, {encoding, utf8}],
+            case file:open(filename:absname(Out), Args) of
+                {ok, Pid} -> Pid;
+                {error, _} -> standard_io
+            end
+    end.
+
+-spec app(string(), string(), string(), string(), string(), tuple()) -> string().
+app(ProjectRoot, ProjectSource, LockFile, ReleaseType, Builder, Args) ->
     _ = application:load(rebar32nix),
     {ok, {application, AppName, List}} = app_src(ProjectSource),
     Vsn = proplists:get_value(vsn, List),
 
     {ok, L} = exec:start_link([{portexe, ?ERLEXEC_PORT}]),
     Deps = fetch_deps(LockFile),
-    log_stderr("Fetched all dependencies! Generating~n"),
+    log_stderr("Fetched all dependencies! Shutting down remaining fetchers...~n"),
     exec:stop_and_wait(L, 5000),
+    log_stderr("Generating~n"),
 
     App = #{
             name => AppName,
             vsn => Vsn,
-            src => ProjectSource,
+            src => ProjectRoot,
             deps => Deps,
             release_type => ReleaseType,
             builder => Builder
            },
     Doc = prettypr:above(header(Args), generator:new(App)),
-    io:format("~s", [prettypr:format(Doc)]),
-    log_stderr("Generation complete~n"),
-    ok.
+    prettypr:format(Doc).
 
 %%====================================================================
 %% Internal functions
@@ -77,6 +110,7 @@ opts_list() ->
      {version,      $v,        "version",      undefined,              "Show version information."},
      {release_type, undefined, "release-type", {atom, release},        "Generate either a release or an escript."},
      {builder,      undefined, "builder",      {string, "rebar3Relx"}, "Derivation builder to use"},
+     {out_file,     $o,        "out",          string,                 "Output file"},
      {file,         undefined, undefined,      string,                 "Input file"}
     ].
 
