@@ -25,31 +25,34 @@
 fix_prettypr_document_tabs(S) -> ?REPLACE_TABS_WITH_SPACES(S).
 -endif.
 
+-spec main(term()) -> no_return().
 main(Args) ->
     log_stderr("Args: ~p~n", [Args]),
     {ok, {Opts, _}} = getopt:parse(opts_list(), Args),
     case proplists:get_bool(help, Opts) of
         true -> getopt:usage(opts_list(), "rebar32nix");
         false ->
-            Path = get_input_file(Opts),
+            Path = get_root_path(Opts),
+            log_stderr("input is ~s~n", [Path]),
+            Src = get_src_dir(Path),
+            log_stderr("src is ~s~n", [Src]),
+            LockFile = get_lock_file(Path),
+            log_stderr("lockfile is ~s~n", [LockFile]),
+            {Fd, OutFile} = get_out_file(Opts),
+            log_stderr("outfile is ~s~n", [OutFile]),
             ReleaseType = proplists:get_value(release_type, Opts),
             Builder = proplists:get_value(builder, Opts),
-            Src = filename:absname_join(Path, "src"),
-            LockFile = filename:absname_join(Path, "rebar.lock"),
-            OutFile = get_out_file(Opts),
-            log_stderr("src is ~s~n", [Src]),
-            log_stderr("lockfile is ~s~n", [LockFile]),
 
             Doc = app(Path, Src, LockFile, ReleaseType, Builder, Args),
             DocTabsReplaced = fix_prettypr_document_tabs(Doc),
-            io:format(OutFile, "~s", [DocTabsReplaced]),
+            io:format(Fd, "~s", [DocTabsReplaced]),
             log_stderr("Generation complete~n"),
             ok
     end,
     erlang:halt(0).
 
--spec get_input_file(tuple()) -> no_return() | string().
-get_input_file(Opts) ->
+-spec get_root_path(tuple()) -> no_return() | string().
+get_root_path(Opts) ->
     case proplists:get_value(file, Opts) of
         undefined ->
             getopt:usage(opts_list(), "rebar32nix"),
@@ -57,23 +60,42 @@ get_input_file(Opts) ->
         File ->
             Path = filename:absname(File),
             case filelib:is_dir(Path) of
+                true -> Path;
                 false ->
                     io:format("Invoke rebar32nix on the root folder of the project~n"),
-                    erlang:halt(1);
-                true ->
-                    filename:dirname(Path)
+                    erlang:halt(1)
             end
+    end.
+
+-spec get_src_dir(string()) -> no_return() | string().
+get_src_dir(Path) ->
+    SrcDir = filename:absname_join(Path, "./src"),
+    case filelib:is_dir(SrcDir) of
+        true -> SrcDir;
+        false -> 
+            io:format("Could not find 'src' folder in '~s', make sure the directory exists", [Path]),
+            erlang:halt(1)
+    end.
+
+-spec get_lock_file(string()) -> no_return() | string().
+get_lock_file(Path) ->
+    LockFile = filename:absname_join(Path, "./rebar.lock"),
+    case filelib:is_regular(LockFile) of
+        true -> LockFile;
+        false -> 
+            io:format("Could not find rebar.lock in '~s', make sure the file exists", [Path]),
+            erlang:halt(1)
     end.
 
 -spec get_out_file(tuple()) -> atom() | file:io_device().
 get_out_file(Opts) ->
     case proplists:get_value(out_file, Opts) of
-        undefined -> standard_io;
+        undefined -> {standard_io, standard_io};
         Out ->
             Args = [write, {encoding, utf8}],
             case file:open(filename:absname(Out), Args) of
-                {ok, Pid} -> Pid;
-                {error, _} -> standard_io
+                {ok, Fd} -> {Fd, filename:absname(Out)};
+                {error, _} -> {standard_io, standard_io}
             end
     end.
 
