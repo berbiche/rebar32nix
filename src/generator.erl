@@ -6,13 +6,13 @@
 -export([new/1]).
 
 -type(app() :: #{
-                 name := atom(),
-                 vsn := string(),
-                 src := string(),
-                 deps := [{binary(), binary()}],
-                 release_type := atom(),
-                 builder := string()
-                }).
+    name := atom(),
+    vsn := string(),
+    src := string(),
+    deps := [{binary(), binary()}],
+    release_type := atom(),
+    builder := string()
+}).
 -export_type([app/0]).
 
 -type hexDep() :: {hex, Name::string(), Vsn::string(), Sha256::string()}.
@@ -56,7 +56,7 @@ app(#{name := AppName, vsn := Vsn, builder := Builder} = App) ->
     above([
         beside(Name, text(" = { " ++ Builder ++ " }:")),
         nest(derivation(App)),
-        text(" ")
+        text("")
     ]).
 
 -spec header() -> prettypr:document().
@@ -71,8 +71,8 @@ header() ->
 -spec deps([resolvedDependency()]) -> prettypr:document().
 deps(Deps) ->
     lists:foldr(fun(Dep, Acc) ->
-                        above(dep_doc(Dep), Acc)
-                end, empty(), Deps).
+        above(dep_doc(Dep), Acc)
+    end, empty(), Deps).
 
 -spec dep_doc(resolvedDependency()) -> prettypr:document().
 dep_doc({hex, Name, Vsn, Sha256}) ->
