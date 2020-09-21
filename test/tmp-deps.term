@@ -1,0 +1,12 @@
+ [{git,"nif","ssh://example.com/nif.git",
+      "b53a36e609c3496c89d4312df2f863cb1259229f",true,
+      "0zp7d7rc6518qswhfdsv21vpslfc5ncx4v1p2y8lncw6bi93w84q"},
+ {git,"cowlib","git://example.com/cowlib.git",
+      "30c745baa42b778fd178b4d91cc4d2fd75ccb854",false,
+      "1pfgap0m02qqpgl3nsphyi8ck61q1y5pc6h68n7jiaji7c58200p"},
+ {hex,"crc32cer","0.1.3.10.20.30.40.50.60.70.80.90.100.200.0123456789",
+      "19z4va72km5gyyhjsih1ph5vzqkhabl94zhppx42f68jsfzl0n73"},
+ {hex,"jsx","2.9.0","1p6q3jvpwpdbgpnfjnbvniacxa62hypam9kn4y55gpdgmcfdpqcf"},
+ {git,"project_with_a_very_long_name","https://example.com",
+      "b2a208611e5c165693031ba98589a0b9e653a060",false,
+      "19slz4i9v9jzf02pm16m40d8038qk2j4jl5kg4swcvwprnnfi18p"}].

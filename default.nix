@@ -63,6 +63,10 @@ rebar3Relx rec {
 
   buildPhase = "HOME=. rebar3 as default escriptize";
 
+  checkPhase = "HOME=. rebar3 eunit";
+
+  doCheck = true;
+
   postInstall = ''
     cp --preserve=mode _checkouts/erlexec/priv/${stdenv.buildPlatform.config}/exec-port $out/bin/exec-port
     wrapProgram $out/bin/exec-port \
