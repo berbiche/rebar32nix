@@ -62,10 +62,11 @@ app(#{name := AppName, vsn := Vsn, builder := Builder} = App) ->
 -spec header() -> prettypr:document().
 header() ->
     above([
-        text("{ stdenv, erlang, fetchHex, fetchGit, fetchgit }:"),
+        text("{ stdenv, erlang, fetchHex, fetchgit }:"),
         text(""),
         text("let"),
-        empty()
+        nest(sep([text("inherit"), text("(builtins)"), text("fetchGit;")]))
+        %empty()
     ]).
 
 -spec deps([resolvedDependency()]) -> prettypr:document().
