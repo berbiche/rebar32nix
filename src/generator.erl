@@ -19,8 +19,8 @@
 -type gitDep() :: {git, Name::string(), Repo::string(), Rev::string(), IsPrivateRepo::boolean(), Sha256::string()}.
 
 -type resolvedDependency() :: hexDep()
-                            | gitDep()
-                            | {Name::string, [resolvedDependency()]}.
+                            | gitDep().
+                            % | {Name::string, [resolvedDependency()]}.
 -export_type([resolvedDependency/0]).
 
 

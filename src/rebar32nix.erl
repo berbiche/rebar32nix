@@ -51,6 +51,17 @@ main(Args) ->
     end,
     erlang:halt(0).
 
+opts_list() ->
+    [
+     %% {Name,      ShortOpt,  LongOpt,        ArgSpec,                HelpMsg}
+     {help,         $h,        "help",         undefined,              "Print this help."},
+     {version,      $v,        "version",      undefined,              "Show version information."},
+     {release_type, undefined, "release-type", {atom, release},        "Generate either a release or an escript."},
+     {builder,      undefined, "builder",      {string, "rebar3Relx"}, "Derivation builder to use"},
+     {out_file,     $o,        "out",          string,                 "Output file"},
+     {file,         undefined, undefined,      string,                 "Input file"}
+    ].
+
 -spec get_root_path(tuple()) -> no_return() | string().
 get_root_path(Opts) ->
     case proplists:get_value(file, Opts) of
@@ -109,6 +120,9 @@ app(ProjectRoot, ProjectSource, LockFile, ReleaseType, Builder, Args) ->
     Deps = fetch_deps(LockFile),
     log_stderr("Fetched all dependencies! Shutting down remaining fetchers...~n"),
     exec:stop_and_wait(L, 5000),
+    log_stderr("Removing duplicate dependencies"),
+    % remove_duplicate_dependencies(Deps),
+    log_stderr("Full list of dependencies. ~p~n", [Deps]),
     log_stderr("Generating~n"),
 
     App = #{
@@ -123,19 +137,8 @@ app(ProjectRoot, ProjectSource, LockFile, ReleaseType, Builder, Args) ->
     prettypr:format(Doc).
 
 %%====================================================================
-%% Internal functions
+%% Generator functions
 %%====================================================================
-opts_list() ->
-    [
-     %% {Name,      ShortOpt,  LongOpt,        ArgSpec,                HelpMsg}
-     {help,         $h,        "help",         undefined,              "Print this help."},
-     {version,      $v,        "version",      undefined,              "Show version information."},
-     {release_type, undefined, "release-type", {atom, release},        "Generate either a release or an escript."},
-     {builder,      undefined, "builder",      {string, "rebar3Relx"}, "Derivation builder to use"},
-     {out_file,     $o,        "out",          string,                 "Output file"},
-     {file,         undefined, undefined,      string,                 "Input file"}
-    ].
-
 -spec header([string()]) -> prettypr:document().
 header(Args) ->
     ArgsDoc = lists:map(fun prettypr:text/1, Args),
@@ -161,7 +164,16 @@ app_src(ProjectSource) ->
     FullPath = unicode:characters_to_list([ProjectSource, "/", FileName]),
     file:script(FullPath).
 
+%%====================================================================
+%% Dependency fetching functions
+%%====================================================================
 -spec fetch_deps(Path::string() | {[dependency()], [dependency()]}) -> [generator:resolvedDependency()].
+fetch_deps(Path) when is_list(Path) ->
+    log_stderr("Inspecting dependencies~n"),
+    Deps = get_deps_list(Path),
+    log_stderr("Deps: ~p~n", [Deps]),
+    AllDeps = fetch_deps(Deps),
+    AllDeps;
 fetch_deps({PublicDeps, PrivateDeps}) ->
     % Handle the "non-recursive" deps first. What is meant by non-recursive
     % is that these deps. will not depend on private dependencies.
@@ -172,40 +184,61 @@ fetch_deps({PublicDeps, PrivateDeps}) ->
                               end
                       end, PublicDeps),
     % We now need to fetch all private dependencies, which is done recursively
-    Deps2 = lists:map(fun(Dep) ->
+    Deps2 = lists:flatmap(fun(Dep) ->
                               case fetch_dep(Dep) of
-                                  {Path, {git, Name, _, _}} -> {Name, fetch_deps(Path)};
-                                  PublicDep -> PublicDep
+                                  {Path, {git, Name, _Repo, _Vsn, IsPrivate, _Sha256} = Attrs} ->
+                                      if
+                                          IsPrivate -> 
+                                              log_stderr("Visiting dependencies of: ~s~n", [Name]),
+                                              [Attrs] ++ fetch_deps(Path);
+                                          true -> 
+                                              log_stderr("Skipping public repository's deps: ~s~n", [Name]),
+                                              [Attrs]
+                                      end;
+                                  PublicDep ->
+                                      log_stderr("Is Public ~p~n", [PublicDep]),
+                                      [PublicDep]
                               end
-                      end, PrivateDeps),
-    lists:append(Deps1, Deps2);
-fetch_deps(Path) ->
-    log_stderr("Inspecting dependencies~n"),
-    Deps = get_deps_list(Path),
-    log_stderr("Deps: ~p~n", [Deps]),
-    AllDeps = fetch_deps(Deps),
-    AllDeps.
+                          end, PrivateDeps),
+    lists:append(Deps1, Deps2).
 
--spec fetch_dep(dependency()) -> generator:resolvedDependency().
-fetch_dep({hex, Name, Vsn}) ->
-    Sha256 = hex_sha256(Name, Vsn),
-    {hex, Name, Vsn, Sha256};
-fetch_dep({git, Name, Repo, Vsn, IsPrivateRepo}) ->
-    {Path, Sha256} = git_sha256(Repo, Vsn),
-    {Path, {git, Name, Repo, Vsn, IsPrivateRepo, Sha256}}.
-
--spec get_deps_list(string) -> {[dependency()], [dependency()]}.
+%%====================================================================
+%% Internal functions
+%%====================================================================
+-spec get_deps_list(string()) -> {[dependency()], [dependency()]}.
 get_deps_list(Filename) ->
-    DepsList = case filelib:is_regular(Filename) of
-                   true ->
-                       {ok, [{_RebarLockVersion, Deps}|_]} = file:consult(Filename),
-                       [{binary_to_list(Name), Source, Level} || {Name, Source, Level} <- Deps];
-                   false -> []
-               end,
-    PublicDeps = lists:map(fun convert_dep/1, DepsList),
-    PrivateDepsToVisit = lists:filter(fun is_private_git_repo/1, DepsList),
+    DepsList = case get_rebar_lock(Filename) of
+        undefined -> [];
+        Path -> get_deps_from_rebar_lock(Path)
+    end,
+    AllDeps = lists:map(fun convert_dep/1, DepsList),
+    {PrivateDepsToVisit, PublicDeps} = lists:partition(fun is_private_git_repo/1, AllDeps),
     {PublicDeps, PrivateDepsToVisit}.
 
+-spec get_rebar_lock(string()) -> string() | undefined.
+get_rebar_lock(Filename) ->
+    case filelib:is_regular(Filename) of
+        true -> Filename;
+        false -> case filelib:is_dir(Filename) of
+            true -> get_rebar_lock(filename:absname_join(Filename, "./rebar.lock"));
+            false -> undefined
+        end
+    end.
+
+-spec get_deps_from_rebar_lock(string()) -> [] | [tuple()].
+get_deps_from_rebar_lock(Path) ->
+    case file:consult(Path) of
+        {ok, [{_RebarLockVersion, Deps}|_]} ->
+            [{binary_to_list(Name), Source, Level} || {Name, Source, Level} <- Deps];
+        _ -> []
+    end.
+
+%% @doc Converts a rebar.lock dependency into a temporary
+%% representation.
+%%
+%% This representation is only used by the fetchers, at which point
+%% the definite representation of the dependency is obtained.
+%% @see fetch_dep/1
 -spec convert_dep({string(), tuple(), any()}) -> dependency().
 convert_dep({Name, {pkg, _, Vsn}, _}) ->
     {hex, Name, binary_to_list(Vsn)};
@@ -215,16 +248,24 @@ convert_dep({Name, {git, Repo, Meta}, _}) ->
               {branch, Branch} -> "refs/heads/" ++ Branch;
               {tag, Tag} -> "refs/tags/" ++ Tag
           end,
-    F = {git, Name, Repo, Vsn},
-    erlang:append_element(F, is_private_git_repo(F)).
+    IsPrivate = string:find(Repo, "ssh://", leading) =/= nomatch,
+    {git, Name, Repo, Vsn, IsPrivate}.
 
 -spec is_private_git_repo(dependency()) -> boolean().
-is_private_git_repo({git, _, Repo, _}) -> string:find(Repo, "ssh://", leading) =/= nomatch;
+is_private_git_repo({git, _, _, _, IsPrivate}) -> IsPrivate;
 is_private_git_repo(_) -> false.
 
 %%====================================================================
 %% Fetcher functions
 %%====================================================================
+-spec fetch_dep(dependency()) -> generator:resolvedDependency().
+fetch_dep({hex, Name, Vsn}) ->
+    Sha256 = hex_sha256(Name, Vsn),
+    {hex, Name, Vsn, Sha256};
+fetch_dep({git, Name, Repo, Vsn, IsPrivateRepo}) ->
+    {Path, Sha256} = git_sha256(Repo, Vsn),
+    {Path, {git, Name, Repo, Vsn, IsPrivateRepo, Sha256}}.
+
 -spec hex_sha256(string(), string()) -> string().
 hex_sha256(Name, Vsn) ->
     %% "https://repo.hex.pm/tarballs/${pkg}-${version}.tar";
@@ -257,5 +298,8 @@ git_sha256(Repo, Vsn) ->
 hex_url(Name, Vsn) ->
     lists:concat([?HEX_REGISTRY_URI, "/", Name, "-", Vsn, ".tar"]).
 
+%%====================================================================
+%% Utility functions
+%%====================================================================
 log_stderr(String) -> log_stderr(String, []).
 log_stderr(String, Args) -> io:format(standard_error, String, Args).
