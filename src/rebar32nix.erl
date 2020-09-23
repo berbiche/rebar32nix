@@ -62,54 +62,6 @@ opts_list() ->
      {file,         undefined, undefined,      string,                 "Input file"}
     ].
 
--spec get_root_path(tuple()) -> no_return() | string().
-get_root_path(Opts) ->
-    case proplists:get_value(file, Opts) of
-        undefined ->
-            getopt:usage(opts_list(), "rebar32nix"),
-            erlang:halt(1);
-        File ->
-            Path = filename:absname(File),
-            case filelib:is_dir(Path) of
-                true -> Path;
-                false ->
-                    io:format("Invoke rebar32nix on the root folder of the project~n"),
-                    erlang:halt(1)
-            end
-    end.
-
--spec get_src_dir(string()) -> no_return() | string().
-get_src_dir(Path) ->
-    SrcDir = filename:absname_join(Path, "./src"),
-    case filelib:is_dir(SrcDir) of
-        true -> SrcDir;
-        false -> 
-            io:format("Could not find 'src' folder in '~s', make sure the directory exists", [Path]),
-            erlang:halt(1)
-    end.
-
--spec get_lock_file(string()) -> no_return() | string().
-get_lock_file(Path) ->
-    LockFile = filename:absname_join(Path, "./rebar.lock"),
-    case filelib:is_regular(LockFile) of
-        true -> LockFile;
-        false -> 
-            io:format("Could not find rebar.lock in '~s', make sure the file exists", [Path]),
-            erlang:halt(1)
-    end.
-
--spec get_out_file(tuple()) -> atom() | file:io_device().
-get_out_file(Opts) ->
-    case proplists:get_value(out_file, Opts) of
-        undefined -> {standard_io, standard_io};
-        Out ->
-            Args = [write, {encoding, utf8}],
-            case file:open(filename:absname(Out), Args) of
-                {ok, Fd} -> {Fd, filename:absname(Out)};
-                {error, _} -> {standard_io, standard_io}
-            end
-    end.
-
 -spec app(string(), string(), string(), string(), string(), tuple()) -> string().
 app(ProjectRoot, ProjectSource, LockFile, ReleaseType, Builder, Args) ->
     _ = application:load(rebar32nix),
@@ -120,9 +72,9 @@ app(ProjectRoot, ProjectSource, LockFile, ReleaseType, Builder, Args) ->
     Deps = fetch_deps(LockFile),
     log_stderr("Fetched all dependencies! Shutting down remaining fetchers...~n"),
     exec:stop_and_wait(L, 5000),
-    log_stderr("Removing duplicate dependencies"),
-    % remove_duplicate_dependencies(Deps),
-    log_stderr("Full list of dependencies. ~p~n", [Deps]),
+    log_stderr("Removing duplicate dependencies~n"),
+    FilteredDeps = remove_duplicate_dependencies(Deps),
+    log_stderr("List of filtered dependencies:~n  ~p~n", [FilteredDeps]),
     log_stderr("Generating~n"),
 
     App = #{
@@ -202,12 +154,9 @@ fetch_deps({PublicDeps, PrivateDeps}) ->
                           end, PrivateDeps),
     lists:append(Deps1, Deps2).
 
-%%====================================================================
-%% Internal functions
-%%====================================================================
 -spec get_deps_list(string()) -> {[dependency()], [dependency()]}.
 get_deps_list(Filename) ->
-    DepsList = case get_rebar_lock(Filename) of
+    DepsList = case find_rebar_lock(Filename) of
         undefined -> [];
         Path -> get_deps_from_rebar_lock(Path)
     end,
@@ -215,12 +164,65 @@ get_deps_list(Filename) ->
     {PrivateDepsToVisit, PublicDeps} = lists:partition(fun is_private_git_repo/1, AllDeps),
     {PublicDeps, PrivateDepsToVisit}.
 
--spec get_rebar_lock(string()) -> string() | undefined.
-get_rebar_lock(Filename) ->
-    case filelib:is_regular(Filename) of
-        true -> Filename;
-        false -> case filelib:is_dir(Filename) of
-            true -> get_rebar_lock(filename:absname_join(Filename, "./rebar.lock"));
+%%====================================================================
+%% Internal functions
+%%====================================================================
+-spec get_root_path(tuple()) -> no_return() | string().
+get_root_path(Opts) ->
+    case proplists:get_value(file, Opts) of
+        undefined ->
+            getopt:usage(opts_list(), "rebar32nix"),
+            erlang:halt(1);
+        File ->
+            Path = filename:absname(File),
+            case filelib:is_dir(Path) of
+                true -> Path;
+                false ->
+                    io:format("Invoke rebar32nix on the root folder of the project~n"),
+                    erlang:halt(1)
+            end
+    end.
+
+-spec get_src_dir(string()) -> no_return() | string().
+get_src_dir(Path) ->
+    SrcDir = filename:absname_join(Path, "./src"),
+    case filelib:is_dir(SrcDir) of
+        true -> SrcDir;
+        false -> 
+            io:format("Could not find 'src' folder in '~s', make sure the directory exists", [Path]),
+            erlang:halt(1)
+    end.
+
+-spec get_lock_file(string()) -> no_return() | string().
+get_lock_file(Path) ->
+    case find_rebar_lock(Path) of
+        undefined -> 
+            io:format("Could not find rebar.lock in '~s', make sure the file exists", [Path]),
+            erlang:halt(1);
+        File -> File
+    end.
+
+-spec get_out_file(tuple()) -> atom() | file:io_device().
+get_out_file(Opts) ->
+    case proplists:get_value(out_file, Opts) of
+        undefined -> {standard_io, standard_io};
+        Out ->
+            Args = [write, {encoding, utf8}],
+            Name = filename:absname(Out),
+            case file:open(Name, Args) of
+                {ok, Fd} -> {Fd, Name};
+                {error, _} -> {standard_io, standard_io}
+            end
+    end.
+
+-spec find_rebar_lock(string()) -> string() | undefined.
+find_rebar_lock(Filename) ->
+    %% We don't use file:path_consult/2 because we don't want to recurse
+    %% into folders that might have submodules
+    case filelib:is_dir(Filename) of
+        true -> find_rebar_lock(filename:absname_join(Filename, "./rebar.lock"));
+        false -> case filelib:is_regular(Filename) of
+            true -> Filename;
             false -> undefined
         end
     end.
@@ -258,6 +260,19 @@ is_private_git_repo(_) -> false.
 %%====================================================================
 %% Fetcher functions
 %%====================================================================
+-spec remove_duplicate_dependencies([generator:resolvedDependency()]) ->
+    [generator:resolvedDependency()].
+remove_duplicate_dependencies(Deps) ->
+    P = lists:ukeysort(2, Deps),
+    if
+        length(P) =/= length(Deps)->
+            log_stderr("~c duplicates were removed~n", [length(Deps) - length(P)]),
+            log_stderr("  ~p~n", [Deps -- P]);
+        true -> ok
+    end,
+    P.
+
+
 -spec fetch_dep(dependency()) -> generator:resolvedDependency().
 fetch_dep({hex, Name, Vsn}) ->
     Sha256 = hex_sha256(Name, Vsn),
