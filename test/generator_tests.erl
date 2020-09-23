@@ -15,5 +15,5 @@ generation_test() ->
            },
     Res = generator:new(App),
     Doc = prettypr:format(Res),
-    ?debugFmt("~s~n", [Doc]),
+    ?debugFmt("~n~s~n", [Doc]),
     ok.

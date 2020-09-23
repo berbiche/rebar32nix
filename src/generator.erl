@@ -170,7 +170,7 @@ app_name(Name, Vsn) ->
 dep_name({hex, Name, Vsn, _Sha256}) ->
     do_dep_name(Name, Vsn);
 dep_name({git, Name, _Repo, Vsn, _Path, _Sha256}) ->
-    do_dep_name(Name, string:slice(Vsn, 0, 8)).
+    do_dep_name(Name, Vsn).
 
 -spec do_dep_name(binary() | string(), binary()) -> prettypr:document().
 do_dep_name(Name, Vsn) ->
