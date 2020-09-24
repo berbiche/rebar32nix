@@ -55,16 +55,15 @@ rebar3Relx rec {
   LDFLAGS = ''-L"${libcap.dev}/lib" -lcap'';
 
   postPatch = ''
-    substituteInPlace ./src/rebar32nix.erl --replace "nix-prefetch-url" "${nix}/bin/nix-prefetch-url"
-    substituteInPlace ./src/rebar32nix.erl --replace "nix-prefetch-git" "${nix-prefetch-git}/bin/nix-prefetch-git"
-    substituteInPlace ./src/rebar32nix.erl --replace "jq" "${jq}/bin/jq"
-    substituteInPlace ./src/rebar32nix.erl --replace "erlexec_port" $out/bin/exec-port
+    substituteInPlace ./include/rebar32nix_internal.hrl --replace "nix-prefetch-url" "${nix}/bin/nix-prefetch-url"
+    substituteInPlace ./include/rebar32nix_internal.hrl --replace "nix-prefetch-git" "${nix-prefetch-git}/bin/nix-prefetch-git"
+    substituteInPlace ./include/rebar32nix_internal.hrl --replace "jq" "${jq}/bin/jq"
+    substituteInPlace ./include/rebar32nix_internal.hrl --replace "erlexec_port" $out/bin/exec-port
   '';
 
   buildPhase = "HOME=. rebar3 as default escriptize";
 
   checkPhase = "HOME=. rebar3 eunit";
-
   doCheck = true;
 
   postInstall = ''

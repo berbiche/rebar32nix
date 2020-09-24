@@ -1,17 +1,8 @@
 -module(rebar32nix).
+-include("rebar32nix_internal.hrl").
 
 %% API exports
 -export([main/1]).
-
--define(HEX_REGISTRY_URI, "https://repo.hex.pm/tarballs").
--define(NIX_PREFETCH_URL, "nix-prefetch-url").
--define(NIX_PREFETCH_GIT, "nix-prefetch-git").
--define(JQ, "jq").
--define(ERLEXEC_PORT, "erlexec_port").
--define(DEFAULT_ERLEXEC_OPTS, [sync, stdout, stderr, {kill_timeout, 120}, {nice, 10}]).
-
--type dependency() :: {hex, Name::string(), Vsn::string()}
-                   |  {git, Name::string(), Repo::string(), Vsn::string()}.
 
 %% prettypr emits tabs when nesting == 8, so we replace them with spaces
 -define(REPLACE_TABS_WITH_SPACES(S), lists:flatten(string:replace(S, "\t", "\s\s\s\s\s\s\s\s", all))).
@@ -77,15 +68,15 @@ app(ProjectRoot, ProjectSource, LockFile, ReleaseType, Builder, Args) ->
     log_stderr("List of filtered dependencies:~n  ~p~n", [FilteredDeps]),
     log_stderr("Generating~n"),
 
-    App = #{
-            name => AppName,
-            vsn => Vsn,
-            src => ProjectRoot,
-            deps => Deps,
-            release_type => ReleaseType,
-            builder => Builder
+    App = #app{
+            name = AppName,
+            vsn  = Vsn,
+            src  = ProjectRoot,
+            deps = Deps,
+            release_type = ReleaseType,
+            builder = Builder
            },
-    Doc = prettypr:above(header(Args), generator:new(App)),
+    Doc = prettypr:above(header(Args), rebar32nix_generator:new(App)),
     prettypr:format(Doc).
 
 %%====================================================================
@@ -119,7 +110,7 @@ app_src(ProjectSource) ->
 %%====================================================================
 %% Dependency fetching functions
 %%====================================================================
--spec fetch_deps(Path::string() | {[dependency()], [dependency()]}) -> [generator:resolvedDependency()].
+-spec fetch_deps(Path::string() | {[dependency()], [dependency()]}) -> [resolvedDependency()].
 fetch_deps(Path) when is_list(Path) ->
     log_stderr("Inspecting dependencies~n"),
     Deps = get_deps_list(Path),
@@ -235,15 +226,10 @@ get_deps_from_rebar_lock(Path) ->
         _ -> []
     end.
 
-%% @doc Converts a rebar.lock dependency into a temporary
-%% representation.
-%%
-%% This representation is only used by the fetchers, at which point
-%% the definite representation of the dependency is obtained.
-%% @see fetch_dep/1
--spec convert_dep({string(), tuple(), any()}) -> dependency().
+%% @doc Converts a rebar.lock dependency a dependency
+-spec convert_dep({string(), tuple(), any()}) -> hexDep() | gitDep().
 convert_dep({Name, {pkg, _, Vsn}, _}) ->
-    {hex, Name, binary_to_list(Vsn)};
+    #hexDep{name = Name, version = binary_to_list(Vsn)};
 convert_dep({Name, {git, Repo, Meta}, _}) ->
     Vsn = case Meta of
               {ref, Ref} -> Ref;
@@ -251,7 +237,7 @@ convert_dep({Name, {git, Repo, Meta}, _}) ->
               {tag, Tag} -> "refs/tags/" ++ Tag
           end,
     IsPrivate = string:find(Repo, "ssh://", leading) =/= nomatch,
-    {git, Name, Repo, Vsn, IsPrivate}.
+    #gitDep{name = Name, repo = Repo, rev = Vsn, isPrivate = IsPrivate}.
 
 -spec is_private_git_repo(dependency()) -> boolean().
 is_private_git_repo({git, _, _, _, IsPrivate}) -> IsPrivate;
@@ -260,8 +246,7 @@ is_private_git_repo(_) -> false.
 %%====================================================================
 %% Fetcher functions
 %%====================================================================
--spec remove_duplicate_dependencies([generator:resolvedDependency()]) ->
-    [generator:resolvedDependency()].
+-spec remove_duplicate_dependencies([resolvedDependency()]) -> [resolvedDependency()].
 remove_duplicate_dependencies(Deps) ->
     P = lists:ukeysort(2, Deps),
     if
@@ -273,13 +258,13 @@ remove_duplicate_dependencies(Deps) ->
     P.
 
 
--spec fetch_dep(dependency()) -> generator:resolvedDependency().
-fetch_dep({hex, Name, Vsn}) ->
+-spec fetch_dep(dependency()) -> resolvedDependency().
+fetch_dep(#hexDep{name = Name, version = Vsn} = Dep) ->
     Sha256 = hex_sha256(Name, Vsn),
-    {hex, Name, Vsn, Sha256};
-fetch_dep({git, Name, Repo, Vsn, IsPrivateRepo}) ->
+    Dep#hexDep{sha256 = Sha256};
+fetch_dep(#gitDep{repo = Repo, rev = Vsn} = Dep) ->
     {Path, Sha256} = git_sha256(Repo, Vsn),
-    {Path, {git, Name, Repo, Vsn, IsPrivateRepo, Sha256}}.
+    {Path, Dep#gitDep{sha256 = Sha256}}.
 
 -spec hex_sha256(string(), string()) -> string().
 hex_sha256(Name, Vsn) ->
