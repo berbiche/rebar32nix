@@ -8,10 +8,7 @@
 , makeWrapper ? pkgs.makeWrapper
 , beamPackages ? pkgs.beam.packages.erlangR21
 
-, customPkgs ?
-    (if builtins.pathExists ../nixgear
-     then (import ../nixgear { inherit pkgs; }).packages
-     else beamPackages)
+, customPkgs ? beamPackages
 , erlang ? customPkgs.erlang
 , fetchHex ? customPkgs.fetchHex
 , rebar3Relx ? customPkgs.rebar3Relx
@@ -46,13 +43,13 @@ rebar3Relx rec {
     src = lib.cleanSource ./.;
     filter = name: type: let
       baseName = baseNameOf (toString name);
-    in !(type == "directory" && (baseName == "result" || baseName == "_build"));
+    in !(type == "directory" && (baseName == "result" || baseName == "_build" || baseName == ".eunit"));
   };
-  # For erlexec
-  buildInputs = [ makeWrapper ] ++ lib.optional stdenv.isLinux libcap.dev;
   checkouts = deps;
-  CXXFLAGS = ''-isystem ${libcap.dev}/include -DHAVE_CAP'';
-  LDFLAGS = ''-L"${libcap.dev}/lib" -lcap'';
+  # Compilation flags and dependencies for erlexec
+  buildInputs = [ makeWrapper ] ++ lib.optional stdenv.isLinux libcap.dev;
+  CXXFLAGS = lib.optionalString stdenv.isLinux ''-isystem ${libcap.dev}/include -DHAVE_CAP'';
+  LDFLAGS = lib.optionalString stdenv.isLinux ''-L"${libcap.dev}/lib" -lcap'';
 
   postPatch = ''
     substituteInPlace ./include/rebar32nix_internal.hrl --replace "nix-prefetch-url" "${nix}/bin/nix-prefetch-url"

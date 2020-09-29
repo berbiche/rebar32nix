@@ -2,7 +2,7 @@
 -record(app, {
     name         = undefined :: atom(),
     vsn          = undefined :: string(),
-    src          = undefined :: string(),
+    src          = undefined :: string() | gitDep(),
     deps         = undefined :: [resolvedDependency()],
     release_type = undefined :: atom(),
     builder      = undefined :: string()

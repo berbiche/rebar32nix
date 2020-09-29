@@ -118,13 +118,26 @@ body(#app{name = Name, vsn = Vsn, src = Src, deps = Deps, release_type = Release
         "rebar3Relx" -> kv("releaseType", quote(atom_to_list(ReleaseType)));
         _            -> empty()
     end, 
-    above([
+    CleanSrc = case Src of
+        #gitDep{repo = Repo, rev = Rev, isPrivate = IsPrivate, sha256 = Sha256} ->
+            {FetchGit, GitAttrs} =
+                if IsPrivate -> {"fetchGit", git_attrs(Repo, Rev)};
+                   true      -> {"fetchgit", git_attrs(Repo, Rev, Sha256)}
+                end,
+            [
+                sep([text("src"), text("="), text(FetchGit), text("{")]),
+                nest(GitAttrs),
+                text("};")
+            ];
+        SrcText -> kv("src", SrcText)
+    end,
+    above(lists:flatten([
         kv("name", quote(atom_to_list(Name))),
         kv("version", quote(Vsn)),
-        kv("src", Src),
+        CleanSrc,
         ReleaseType2,
         deps_list(Deps)
-    ]).
+    ])).
 
 -spec deps_list([resolvedDependency()]) -> prettypr:document().
 deps_list(Deps) ->

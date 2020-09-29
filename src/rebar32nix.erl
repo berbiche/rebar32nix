@@ -18,25 +18,25 @@ fix_prettypr_document_tabs(S) -> ?REPLACE_TABS_WITH_SPACES(S).
 
 -spec main(term()) -> no_return().
 main(Args) ->
-    log_stderr("Args: ~p~n", [Args]),
     {ok, {Opts, _}} = getopt:parse(opts_list(), Args),
     case proplists:get_bool(help, Opts) of
         true -> getopt:usage(opts_list(), "rebar32nix");
         false ->
-            Path = get_root_path(Opts),
-            log_stderr("input is ~s~n", [Path]),
-            Src = get_src_dir(Path),
-            log_stderr("src is ~s~n", [Src]),
-            LockFile = get_lock_file(Path),
-            log_stderr("lockfile is ~s~n", [LockFile]),
-            {Fd, OutFile} = get_out_file(Opts),
-            log_stderr("outfile is ~s~n", [OutFile]),
+            log_stderr("Args: ~p~n", [Args]),
+            ProjectRoot = case proplists:get_value(file, Opts) of
+                undefined ->
+                    getopt:usage(opts_list(), "rebar32nix"),
+                    erlang:halt(1),
+                    undefined; %% unreachable
+                UriOrFile -> UriOrFile
+            end,
             ReleaseType = proplists:get_value(release_type, Opts),
             Builder = proplists:get_value(builder, Opts),
+            Outfile = get_out_file(Opts),
 
-            Doc = app(Path, Src, LockFile, ReleaseType, Builder, Args),
+            Doc = app(ProjectRoot, ReleaseType, Builder, Args),
             DocTabsReplaced = fix_prettypr_document_tabs(Doc),
-            io:format(Fd, "~s", [DocTabsReplaced]),
+            io:format(Outfile, "~s", [DocTabsReplaced]),
             log_stderr("Generation complete~n"),
             ok
     end,
@@ -50,19 +50,31 @@ opts_list() ->
      {release_type, undefined, "release-type", {atom, release},        "Generate either a release or an escript."},
      {builder,      undefined, "builder",      {string, "rebar3Relx"}, "Derivation builder to use"},
      {out_file,     $o,        "out",          string,                 "Output file"},
-     {file,         undefined, undefined,      string,                 "Input file"}
+     {file,         undefined, undefined,      string,                 "Input file or a valid git URL"}
     ].
 
--spec app(string(), string(), string(), string(), string(), tuple()) -> string().
-app(ProjectRoot, ProjectSource, LockFile, ReleaseType, Builder, Args) ->
+-spec app(string(), string(), string(), tuple()) -> string().
+app(Path, ReleaseType, Builder, Args) ->
+    {ok, L} = exec:start_link([{portexe, ?ERLEXEC_PORT}]),
+
+    Project = get_root_path(Path),
+    log_stderr("input is ~s~n", [Path]),
+    #gitDep{name = ProjectRoot} = Project,
+
+    ProjectSource = get_src_dir(ProjectRoot),
+    log_stderr("src is ~s~n", [ProjectSource]),
+    LockFile = get_lock_file(ProjectRoot),
+    log_stderr("lockfile is ~s~n", [LockFile]),
+
     _ = application:load(rebar32nix),
     {ok, {application, AppName, List}} = app_src(ProjectSource),
     Vsn = proplists:get_value(vsn, List),
 
-    {ok, L} = exec:start_link([{portexe, ?ERLEXEC_PORT}]),
     Deps = fetch_deps(LockFile),
     log_stderr("Fetched all dependencies! Shutting down remaining fetchers...~n"),
+    %% Stop all remaining fetcher processes
     exec:stop_and_wait(L, 5000),
+
     log_stderr("Removing duplicate dependencies~n"),
     FilteredDeps = remove_duplicate_dependencies(Deps),
     log_stderr("List of filtered dependencies:~n  ~p~n", [FilteredDeps]),
@@ -71,7 +83,7 @@ app(ProjectRoot, ProjectSource, LockFile, ReleaseType, Builder, Args) ->
     App = #app{
             name = AppName,
             vsn  = Vsn,
-            src  = ProjectRoot,
+            src  = Project,
             deps = Deps,
             release_type = ReleaseType,
             builder = Builder
@@ -158,20 +170,47 @@ get_deps_list(Filename) ->
 %%====================================================================
 %% Internal functions
 %%====================================================================
--spec get_root_path(tuple()) -> no_return() | string().
-get_root_path(Opts) ->
-    case proplists:get_value(file, Opts) of
-        undefined ->
-            getopt:usage(opts_list(), "rebar32nix"),
+-spec get_root_path(tuple()) -> no_return() | string() | gitDep().
+get_root_path({url, Path}) ->
+    log_stderr("Fetching remote root path: ~s~n", [Path]),
+    Status = exec:run([
+        ?NIX_PREFETCH_GIT, "--url", "'" ++ Path ++ "'"
+    ], ?DEFAULT_ERLEXEC_OPTS),
+    case Status of
+        {ok, [{stdout, [Output]} | _]} ->
+            #{path := Path2, sha256 := Sha256, rev := Rev} = jsone:decode(Output, [{keys, attempt_atom}]),
+            IsPrivate = string:find(Path, "ssh://", leading) =/= nomatch,
+            #gitDep{name = binary_to_list(Path2),
+                    repo = Path,
+                    rev = binary_to_list(Rev),
+                    isPrivate = IsPrivate,
+                    sha256 = binary_to_list(Sha256)
+                   };
+        {error, [{exit_status, _}, {stderr, Err}]} ->
+            io:format("An error occured while fetching the remote:~n~n~s~n", [Err]),
             erlang:halt(1);
-        File ->
-            Path = filename:absname(File),
-            case filelib:is_dir(Path) of
-                true -> Path;
-                false ->
-                    io:format("Invoke rebar32nix on the root folder of the project~n"),
-                    erlang:halt(1)
-            end
+        _ ->
+            io:format("The specified URL is not valid~n"),
+            erlang:halt(1)
+    end;
+get_root_path({file, File}) ->
+    log_stderr("File ~p~n", [File]),
+    Path = filename:absname(File),
+    case filelib:is_dir(Path) of
+        true -> Path;
+        false ->
+            io:format("The path is not valid, invoke rebar32nix on the root folder of the project~n"),
+            erlang:halt(1)
+    end;
+get_root_path(UriOrFile) ->
+    case uri_string:parse(UriOrFile) of
+        #{scheme := "file", path := Path} -> get_root_path({file, Path});
+        #{scheme := Scheme} ->
+            case re:run(Scheme, "https?|git|ssh") of
+                {match, _} -> get_root_path({url, UriOrFile});
+                _ -> io:format("The URL uses an invalid protocol. Only http(s), git and ssh are supported~n")
+            end;
+        _ -> get_root_path({file, UriOrFile})
     end.
 
 -spec get_src_dir(string()) -> no_return() | string().
@@ -201,8 +240,8 @@ get_out_file(Opts) ->
             Args = [write, {encoding, utf8}],
             Name = filename:absname(Out),
             case file:open(Name, Args) of
-                {ok, Fd} -> {Fd, Name};
-                {error, _} -> {standard_io, standard_io}
+                {ok, Fd} -> Fd;
+                {error, _} -> standard_io
             end
     end.
 
@@ -252,11 +291,10 @@ remove_duplicate_dependencies(Deps) ->
     if
         length(P) =/= length(Deps)->
             log_stderr("~c duplicates were removed~n", [length(Deps) - length(P)]),
-            log_stderr("  ~p~n", [Deps -- P]);
-        true -> ok
-    end,
-    P.
-
+            log_stderr("  ~p~n", [Deps -- P]),
+            P;
+        true -> P
+    end.
 
 -spec fetch_dep(dependency()) -> resolvedDependency().
 fetch_dep(#hexDep{name = Name, version = Vsn} = Dep) ->
@@ -290,7 +328,7 @@ git_sha256(Repo, Vsn) ->
         ?NIX_PREFETCH_GIT, "--url", "'" ++ Repo ++ "'", "--rev", Vsn
     ], ?DEFAULT_ERLEXEC_OPTS),
 
-    #{<<"path">> := Path, <<"sha256">> := Sha256} = jsone:decode(Output),
+    #{path := Path, sha256 := Sha256} = jsone:decode(Output, [{keys, attempt_atom}]),
     log_stderr("git_sha256: fetched ~s, Path: ~s, Sha256: ~s~n", [Repo, Path, Sha256]),
     {binary_to_list(Path), binary_to_list(Sha256)}.
 

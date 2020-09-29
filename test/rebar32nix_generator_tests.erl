@@ -8,7 +8,8 @@ generation_test() ->
     App = #app{
             name = toto,
             vsn  = "git",
-            src  = "./",
+            % src  = "./.",
+            src = #gitDep{name = "", repo = "ssh://test", rev = "12345", isPrivate = true, sha256 = ""},
             deps = Deps,
             release_type = release,
             builder = "buildErlangMk"
