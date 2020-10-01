@@ -52,9 +52,14 @@ header() ->
 
 -spec deps([resolvedDependency()]) -> prettypr:document().
 deps(Deps) ->
-    lists:foldr(fun(Dep, Acc) ->
+    DepsDoc = lists:foldr(fun(Dep, Acc) ->
         above(dep_doc(Dep), Acc)
-    end, empty(), Deps).
+    end, empty(), Deps),
+    above([
+        sep([text("deps"), text("="), text("{")]),
+        nest(DepsDoc),
+        text("};")
+    ]).
 
 -spec dep_doc(resolvedDependency()) -> prettypr:document().
 dep_doc(#hexDep{name = Name, version = Vsn, sha256 = Sha256}) ->
@@ -136,8 +141,13 @@ body(#app{name = Name, vsn = Vsn, src = Src, deps = Deps, release_type = Release
         kv("version", quote(Vsn)),
         CleanSrc,
         ReleaseType2,
-        deps_list(Deps)
+        deps_list(Deps),
+        passthru()
     ])).
+
+-spec passthru() -> prettypr:document().
+passthru() ->
+    kv("passthru.deps", "deps").
 
 -spec deps_list([resolvedDependency()]) -> prettypr:document().
 deps_list(Deps) ->
@@ -146,7 +156,7 @@ deps_list(Deps) ->
             empty();
         DepsDocs ->
             above([
-                text("beamDeps = ["),
+                text("beamDeps = with deps; ["),
                 nest(above(DepsDocs)),
                 text("];")
             ])
@@ -212,7 +222,7 @@ above([Head|Tail]) ->
 
 -spec follow(prettypr:document(), prettypr:document()) -> prettypr:document().
 follow(D1, D2) ->
-    prettypr:follow(D1, D2, ?DEFAULT_INDENT_SIZE).
+    prettypr:follow(D1, D2, 0).
 
 -spec fix_version(string() | binary() | atom()) -> string().
 fix_version(Vsn) when is_atom(Vsn) -> fix_version(atom_to_list(Vsn));
