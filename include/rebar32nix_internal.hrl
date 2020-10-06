@@ -1,27 +1,27 @@
 %% records
 -record(app, {
-    name         = undefined :: atom(),
-    vsn          = undefined :: string(),
-    src          = undefined :: string() | gitDep(),
-    deps         = undefined :: [resolvedDependency()],
+    name = undefined :: atom(),
+    vsn = undefined :: string(),
+    src = undefined :: string() | gitDep(),
+    deps = undefined :: [resolvedDependency()],
     release_type = undefined :: atom(),
-    builder      = undefined :: string()
+    builder = undefined :: string()
 }).
 
 -record(hexDep, {
-    name    :: string(),
+    name :: string(),
     version :: string(),
     %% sha256 is known only after fetching a dependency
-    sha256  = undefined :: string()
+    sha256 = undefined :: string()
 }).
 
 -record(gitDep, {
-    name      :: string(),
-    repo      :: string(),
-    rev       :: string(),
+    name :: string(),
+    repo :: string(),
+    rev :: string(),
     isPrivate :: boolean(),
     %% sha256 is known only after fetching a dependency
-    sha256    = undefined :: string()
+    sha256 = undefined :: string()
 }).
 
 %% types
@@ -31,8 +31,9 @@
 %% An erlang dependency for the Nix derivation
 -type resolvedDependency() :: hexDep() | gitDep().
 %% A rebar.lock dependency that has not been resolved
--type dependency() :: {hex, Name::string(), Vsn::string()}
-                   |  {git, Name::string(), Repo::string(), Vsn::string()}.
+-type dependency() ::
+    {hex, Name :: string(), Vsn :: string()} |
+    {git, Name :: string(), Repo :: string(), Vsn :: string()}.
 
 %% defines
 -define(DEFAULT_INDENT_SIZE, 2).

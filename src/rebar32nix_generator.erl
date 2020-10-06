@@ -1,4 +1,5 @@
 -module(rebar32nix_generator).
+
 -include("rebar32nix_internal.hrl").
 
 -import(prettypr, [above/2, beside/2, sep/1, empty/0]).
@@ -16,11 +17,13 @@ new(#app{name = AppName, vsn = Vsn} = App) ->
         header(),
         nest(builds(App)),
         text("in"),
-        nest(sep([
-            text("erlang.callPackage"),
-            Name,
-            text("{ }")
-        ])),
+        nest(
+            sep([
+                text("erlang.callPackage"),
+                Name,
+                text("{ }")
+            ])
+        ),
         text("")
     ]).
 
@@ -52,9 +55,7 @@ header() ->
 
 -spec deps([resolvedDependency()]) -> prettypr:document().
 deps(Deps) ->
-    DepsDoc = lists:foldr(fun(Dep, Acc) ->
-        above(dep_doc(Dep), Acc)
-    end, empty(), Deps),
+    DepsDoc = above(lists:map(fun dep_doc/1, Deps)),
     above([
         sep([text("deps"), text("="), text("{")]),
         nest(DepsDoc),
@@ -72,8 +73,9 @@ dep_doc(#hexDep{name = Name, version = Vsn, sha256 = Sha256}) ->
     );
 dep_doc(#gitDep{name = Name, repo = Repo, rev = Vsn, isPrivate = IsPrivate, sha256 = Sha256}) ->
     {FetchGit, GitAttrs} =
-        if IsPrivate -> {"fetchGit", git_attrs(Repo, Vsn)};
-           true      -> {"fetchgit", git_attrs(Repo, Vsn, Sha256)}
+        if
+            IsPrivate -> {"fetchGit", git_attrs(Repo, Vsn)};
+            true -> {"fetchgit", git_attrs(Repo, Vsn, Sha256)}
         end,
     prettypr:break(
         above([
@@ -118,32 +120,45 @@ derivation(#app{builder = Builder} = App) ->
     ).
 
 -spec body(app()) -> prettypr:document().
-body(#app{name = Name, vsn = Vsn, src = Src, deps = Deps, release_type = ReleaseType, builder = Builder}) ->
-    ReleaseType2 = case Builder of
-        "rebar3Relx" -> kv("releaseType", quote(atom_to_list(ReleaseType)));
-        _            -> empty()
-    end, 
-    CleanSrc = case Src of
-        #gitDep{repo = Repo, rev = Rev, isPrivate = IsPrivate, sha256 = Sha256} ->
-            {FetchGit, GitAttrs} =
-                if IsPrivate -> {"fetchGit", git_attrs(Repo, Rev)};
-                   true      -> {"fetchgit", git_attrs(Repo, Rev, Sha256)}
-                end,
-            [
-                sep([text("src"), text("="), text(FetchGit), text("{")]),
-                nest(GitAttrs),
-                text("};")
-            ];
-        SrcText -> kv("src", SrcText)
-    end,
-    above(lists:flatten([
-        kv("name", quote(atom_to_list(Name))),
-        kv("version", quote(Vsn)),
-        CleanSrc,
-        ReleaseType2,
-        deps_list(Deps),
-        passthru()
-    ])).
+body(#app{
+    name = Name,
+    vsn = Vsn,
+    src = Src,
+    deps = Deps,
+    release_type = ReleaseType,
+    builder = Builder
+}) ->
+    ReleaseType2 =
+        case Builder of
+            "rebar3Relx" -> kv("releaseType", quote(atom_to_list(ReleaseType)));
+            _ -> empty()
+        end,
+    CleanSrc =
+        case Src of
+            #gitDep{repo = Repo, rev = Rev, isPrivate = IsPrivate, sha256 = Sha256} ->
+                {FetchGit, GitAttrs} =
+                    if
+                        IsPrivate -> {"fetchGit", git_attrs(Repo, Rev)};
+                        true -> {"fetchgit", git_attrs(Repo, Rev, Sha256)}
+                    end,
+                [
+                    sep([text("src"), text("="), text(FetchGit), text("{")]),
+                    nest(GitAttrs),
+                    text("};")
+                ];
+            SrcText ->
+                kv("src", SrcText)
+        end,
+    above(
+        lists:flatten([
+            kv("name", quote(atom_to_list(Name))),
+            kv("version", quote(Vsn)),
+            CleanSrc,
+            ReleaseType2,
+            deps_list(Deps),
+            passthru()
+        ])
+    ).
 
 -spec passthru() -> prettypr:document().
 passthru() ->
@@ -205,8 +220,8 @@ nest(Document) ->
     prettypr:nest(?DEFAULT_INDENT_SIZE, Document).
 
 -spec beside([prettypr:document()]) -> prettypr:document().
-beside([Head|Tail]) ->
-    lists:foldl(fun(A,B) -> prettypr:beside(B, A) end, Head, Tail).
+beside([Head | Tail]) ->
+    lists:foldl(fun(A, B) -> prettypr:beside(B, A) end, Head, Tail).
 
 -spec text(binary() | atom() | string()) -> prettypr:document().
 text(Bin) when is_binary(Bin) ->
@@ -217,15 +232,17 @@ text(Atom) when is_atom(Atom) ->
     prettypr:text(atom_to_list(Atom)).
 
 -spec above([prettypr:document()]) -> prettypr:document().
-above([Head|Tail]) ->
-    lists:foldl(fun(A,B) -> prettypr:above(B, A) end, Head, Tail).
+above([Head | Tail]) ->
+    lists:foldl(fun(A, B) -> prettypr:above(B, A) end, Head, Tail).
 
 -spec follow(prettypr:document(), prettypr:document()) -> prettypr:document().
 follow(D1, D2) ->
     prettypr:follow(D1, D2, 0).
 
 -spec fix_version(string() | binary() | atom()) -> string().
-fix_version(Vsn) when is_atom(Vsn) -> fix_version(atom_to_list(Vsn));
-fix_version(Vsn) when is_binary(Vsn) -> fix_version(binary_to_list(Vsn));
+fix_version(Vsn) when is_atom(Vsn) ->
+    fix_version(atom_to_list(Vsn));
+fix_version(Vsn) when is_binary(Vsn) ->
+    fix_version(binary_to_list(Vsn));
 fix_version(Vsn) when is_list(Vsn) ->
     re:replace(Vsn, "\\.", "_", [global, {return, list}]).
