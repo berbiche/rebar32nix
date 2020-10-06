@@ -41,3 +41,12 @@ Usage: rebar32nix [-h] [-v] [--release-type [<release_type>]]
   -o, --out       Output file
   <file>          Input file or a valid git URL
 ```
+
+## Development
+
+**Format code in-place**
+
+``` console
+$ rebar3 get-deps
+$ rebar3 fmt --write
+```
